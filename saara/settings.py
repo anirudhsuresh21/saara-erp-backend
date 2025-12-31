@@ -42,7 +42,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'saara.authapp'
+    'saara.authapp',
+    'saara.erp',
+    'rest_framework'
 ]
 
 MIDDLEWARE = [

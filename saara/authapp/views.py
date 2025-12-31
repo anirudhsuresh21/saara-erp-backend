@@ -57,12 +57,11 @@ def supabase_login(request):
         access_token = auth_response.session.access_token
         user_data = auth_response.user
         
-        # Decode token to get user details
+        # Decode token to get user details (without verification to get payload)
+        # The token is already validated by Supabase
         payload = jwt.decode(
             access_token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=['HS256'],
-            audience='authenticated'
+            options={"verify_signature": False}
         )
         
         # Get or create Django user

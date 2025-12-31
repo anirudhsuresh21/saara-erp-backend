@@ -57,15 +57,15 @@ class AllowedEmailDomain(models.Model):
         # check all active domains
         active_domains = cls.objects.filter(is_active=True)
         
-        for allowed_domains in active_domains:
-            domain_lower = allowed_domains.lower()
+        for allowed_domain in active_domains:
+            domain_lower = allowed_domain.domain.lower()
             
             #exact match
             if email_domain == domain_lower:
                 return True
             
             # subdomain match
-            if allowed_domains.allow_subdomains:
+            if allowed_domain.allow_subdomains:
                 if email_domain.endswith(f'.{domain_lower}'):
                     return True
         return False

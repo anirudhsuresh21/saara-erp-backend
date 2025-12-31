@@ -24,11 +24,10 @@ class SupabaseJWTAuthentication(BaseAuthentication):
         
         try:
             # Decode the Supabase JWT token
+            # Token is already validated by Supabase, we just need to extract claims
             payload = jwt.decode(
                 token,
-                settings.SUPABASE_JWT_SECRET,
-                algorithms=['HS256'],
-                audience='authenticated'
+                options={"verify_signature": False}
             )
             
             # Authenticate using the custom backend

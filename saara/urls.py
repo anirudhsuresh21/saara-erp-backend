@@ -16,8 +16,25 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-
+from rest_framework import routers
+from saara.authapp import views
+from saara.erp import views
+router = routers.DefaultRouter()
+router.register(r"erp/dept", views.DepartmentViewSet)
+router.register(r"erp/stud-fees", views.StudentFeesViewSet)
+router.register(r"erp/teacher", views.TeacherViewSet)
+router.register(r"erp/assignment-sub", views.AssignmentSubmissionViewSet)
+router.register(r"erp/assignment", views.AssignmentViewSet)
+router.register(r"erp/result", views.ResultViewSet)
+router.register(r"erp/attendance", views.AttendanceViewSet)
+router.register(r"erp/admin", views.AdminViewSet)
+router.register(r"erp/course", views.CourseViewSet)
+router.register(r"erp/course-faculty", views.CourseFacultyViewSet)
+# router.register(r"erp", views.)
+# router.register(r"groups", views.GroupViewSet)
 urlpatterns = [
+    path("", include(router.urls)),
     path('admin/', admin.site.urls),
     path('api/', include('saara.authapp.urls')),
+    path('erp/', include('saara.erp.urls'))
 ]
