@@ -36,5 +36,6 @@ urlpatterns = [
     path("", include(router.urls)),
     path('admin/', admin.site.urls),
     path('api/', include('saara.authapp.urls')),
-    path('erp/', include('saara.erp.urls'))
+    path('erp/', include('saara.erp.urls')),
+    path('api/chatbot/', include('saara.chatbot.urls')),
 ]

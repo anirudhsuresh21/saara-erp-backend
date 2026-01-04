@@ -34,7 +34,7 @@ class AllowedEmailDomain(models.Model):
 
     def save(self, *args, **kwargs):
         self.clean()
-        super().save(*args, *kwargs)
+        super().save(*args, **kwargs)
         
     def __str__(self):
         subdomain_info = " (+ subdomains)" if self.allow_subdomains else ""
@@ -94,6 +94,16 @@ class User(models.Model):
     
     class Meta:
         db_table = 'users'
+    
+    @property
+    def is_authenticated(self):
+        """Always return True for authenticated users. Required by DRF."""
+        return True
+    
+    @property
+    def is_anonymous(self):
+        """Always return False. Required by DRF."""
+        return False
     
     def set_password(self, raw_password):
         self.password_hash = make_password(raw_password)

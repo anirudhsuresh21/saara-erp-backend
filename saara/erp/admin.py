@@ -1,15 +1,24 @@
 from django.contrib import admin
 from django.contrib import admin
 from .models import (
-    Department, Student, Teacher, Admin,
+    Institution, Department, Student, Teacher, Admin,
     Course, CourseFaculty, Attendance, FeeStructure, StudentFees,
     Assignment, AssignmentSubmission, Exam, Result
 )
 # Register your models here.
+
+@admin.register(Institution)
+class InstitutionAdmin(admin.ModelAdmin):
+    list_display = ['institution_id', 'name', 'short_name', 'city', 'is_active']
+    list_filter = ['is_active', 'city', 'state']
+    search_fields = ['name', 'short_name']
+
+
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ['department_id', 'department_name', 'hod_id']
-    search_fields = ['department_name', 'department_id']
+    list_display = ['department_id', 'department_name', 'dept_code', 'program_type', 'institution', 'hod_id']
+    list_filter = ['institution', 'program_type']
+    search_fields = ['department_name', 'dept_code']
 
 
 @admin.register(Student)
@@ -42,8 +51,8 @@ class AttendanceAdmin(admin.ModelAdmin):
 
 @admin.register(FeeStructure)
 class FeeStructureAdmin(admin.ModelAdmin):
-    list_display = ['fee_id', 'academic_year', 'semester', 'amount']
-    list_filter = ['academic_year', 'semester']
+    list_display = ['fee_id', 'department', 'academic_year', 'amount']
+    list_filter = ['academic_year', 'department']
 
 
 @admin.register(StudentFees)

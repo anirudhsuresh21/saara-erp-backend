@@ -44,11 +44,14 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'saara.authapp',
     'saara.erp',
-    'rest_framework'
+    'saara.chatbot',
+    'rest_framework',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -57,6 +60,10 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'saara.authapp.middleware.SupabaseAuthMiddleware'
 ]
+
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = True  # For development - restrict in production
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'saara.urls'
 
@@ -83,15 +90,15 @@ WSGI_APPLICATION = 'saara.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('SUPABASE_DB_NAME',''),
         'USER': os.getenv('SUPABASE_DB_USER',''),
         'PASSWORD': os.getenv('SUPABASE_DB_PASSWORD',''),
         'HOST': os.getenv('SUPABASE_DB_HOST',''),
         'PORT': os.getenv('SUPABASE_DB_PORT',''),
-        # 'OPTIONS': {
-        #     'sslmode': 'require',
-        # }
+        'OPTIONS': {
+            'sslmode': 'require',
+        }
     }
 }
 
@@ -131,6 +138,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+]
+
 # Supabase Configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL', 'https://your-project.supabase.co')
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY', '')

@@ -5,19 +5,60 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
 
 from .models import (
-    Department, Student, Teacher, Admin, Course, CourseFaculty,
+    Institution, Department, Student, Teacher, Admin, Course, CourseFaculty, StudentCourse,
     Attendance, FeeStructure, StudentFees, Assignment,
-    AssignmentSubmission, Exam, Result
+    AssignmentSubmission, Exam, Result, Announcement
 )
 from .serializers import (
-    DepartmentSerializer, StudentSerializer, StudentListSerializer,
+    InstitutionSerializer, DepartmentSerializer, StudentSerializer, StudentListSerializer,
     TeacherSerializer, TeacherListSerializer, AdminSerializer,
-    CourseSerializer, CourseFacultySerializer, AttendanceSerializer,
+    CourseSerializer, CourseFacultySerializer, StudentCourseSerializer,
+    StudentCourseListSerializer, AttendanceSerializer,
     BulkAttendanceSerializer, FeeStructureSerializer, StudentFeesSerializer,
     AssignmentSerializer, AssignmentSubmissionSerializer,
-    ExamSerializer, ResultSerializer
+    ExamSerializer, ResultSerializer, AnnouncementSerializer, AnnouncementListSerializer
 )
 from .permissions import IsAdminOrReadOnly, IsAdminOrTeacher
+
+
+class InstitutionViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Institution/College
+    
+    Permissions:
+    - Admin: Full access (CRUD)
+    - Others: Read-only
+    """
+    queryset = Institution.objects.all()
+    serializer_class = InstitutionSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'short_name', 'city']
+    ordering_fields = ['name', 'short_name', 'created_at']
+    ordering = ['name']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filter by active status
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        # Filter by city
+        city = self.request.query_params.get('city')
+        if city:
+            queryset = queryset.filter(city__icontains=city)
+        
+        return queryset
+    
+    @action(detail=True, methods=['get'])
+    def departments(self, request, pk=None):
+        """Get all departments for an institution"""
+        institution = self.get_object()
+        departments = institution.departments.all()
+        serializer = DepartmentSerializer(departments, many=True)
+        return Response(serializer.data)
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
@@ -28,13 +69,23 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     - Admin: Full access (CRUD)
     - Others: Read-only
     """
-    queryset = Department.objects.all()
+    queryset = Department.objects.select_related('institution').all()
     serializer_class = DepartmentSerializer
     permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['department_name']
-    ordering_fields = ['department_name']
+    search_fields = ['department_name', 'dept_code']
+    ordering_fields = ['department_name', 'institution__name']
     ordering = ['department_name']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filter by institution
+        institution_id = self.request.query_params.get('institution')
+        if institution_id:
+            queryset = queryset.filter(institution_id=institution_id)
+        
+        return queryset
 
 
 class StudentViewSet(viewsets.ModelViewSet):
@@ -241,6 +292,86 @@ class CourseFacultyViewSet(viewsets.ModelViewSet):
         return queryset
 
 
+class StudentCourseViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Student Course Enrollments
+    
+    Permissions:
+    - Admin: Full access (CRUD)
+    - Teacher: Can view enrollments for their courses
+    - Students: Can view their own enrollments
+    """
+    queryset = StudentCourse.objects.select_related('student', 'course', 'course__department').all()
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['course__course_name', 'student__first_name', 'student__last_name']
+    ordering_fields = ['academic_year', 'semester', 'enrollment_date']
+    ordering = ['-academic_year', '-semester']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return StudentCourseListSerializer
+        return StudentCourseSerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Students can only see their own enrollments
+        if user.role == 'student':
+            try:
+                student = Student.objects.get(user=user)
+                queryset = queryset.filter(student=student)
+            except Student.DoesNotExist:
+                queryset = queryset.none()
+        
+        # Filter by student
+        student_id = self.request.query_params.get('student')
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+        
+        # Filter by course
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            queryset = queryset.filter(course_id=course_id)
+        
+        # Filter by academic year
+        academic_year = self.request.query_params.get('academic_year')
+        if academic_year:
+            queryset = queryset.filter(academic_year=academic_year)
+        
+        # Filter by semester
+        semester = self.request.query_params.get('semester')
+        if semester:
+            queryset = queryset.filter(semester=semester)
+        
+        return queryset
+    
+    @action(detail=False, methods=['get'])
+    def my_courses(self, request):
+        """Get courses for the current logged-in student"""
+        user = request.user
+        if user.role != 'student':
+            return Response({'error': 'Only students can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            student = Student.objects.get(user=user)
+            enrollments = StudentCourse.objects.filter(student=student)
+            serializer = StudentCourseListSerializer(enrollments, many=True)
+            return Response(serializer.data)
+        except Student.DoesNotExist:
+            return Response({'error': 'Student profile not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['post'])
+    def enroll(self, request):
+        """Enroll a student in a course"""
+        serializer = StudentCourseSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 class AttendanceViewSet(viewsets.ModelViewSet):
     """
     CRUD operations for Attendance
@@ -317,15 +448,20 @@ class FeeStructureViewSet(viewsets.ModelViewSet):
     - Admin: Full access (CRUD)
     - Others: Read-only
     """
-    queryset = FeeStructure.objects.all()
+    queryset = FeeStructure.objects.select_related('department').all()
     serializer_class = FeeStructureSerializer
     permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
     filter_backends = [filters.OrderingFilter]
-    ordering_fields = ['academic_year', 'semester', 'amount']
-    ordering = ['-academic_year', 'semester']
+    ordering_fields = ['academic_year', 'amount', 'department__department_name']
+    ordering = ['-academic_year',]
     
     def get_queryset(self):
         queryset = super().get_queryset()
+        
+        # Filter by department
+        department_id = self.request.query_params.get('department')
+        if department_id:
+            queryset = queryset.filter(department_id=department_id)
         
         # Filter by academic year
         year = self.request.query_params.get('academic_year')
@@ -333,9 +469,9 @@ class FeeStructureViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(academic_year=year)
         
         # Filter by semester
-        semester = self.request.query_params.get('semester')
-        if semester:
-            queryset = queryset.filter(semester=semester)
+        # semester = self.request.query_params.get('semester')
+        # if semester:
+        #     queryset = queryset.filter(semester=semester)
         
         return queryset
 
@@ -525,3 +661,94 @@ class ResultViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(grade=grade)
         
         return queryset
+
+class AnnouncementViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Announcements
+    
+    Permissions:
+    - Admin: Full access (CRUD)
+    - Teacher: Can create, update, delete their own announcements
+    - Students: Read-only (only active announcements)
+    """
+    queryset = Announcement.objects.select_related('created_by', 'department').all()
+    permission_classes = [IsAuthenticated, IsAdminOrTeacher]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'content']
+    ordering_fields = ['created_at', 'title']
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return AnnouncementListSerializer
+        return AnnouncementSerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Students only see active announcements targeted at them or their enrolled courses
+        if user.role == 'student':
+            try:
+                student = Student.objects.get(user=user)
+                enrolled_course_ids = StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
+                queryset = queryset.filter(is_active=True).filter(
+                    Q(target_audience='all') | 
+                    Q(target_audience='students') |
+                    Q(target_audience='course', course_id__in=enrolled_course_ids)
+                )
+            except Student.DoesNotExist:
+                queryset = queryset.filter(
+                    is_active=True
+                ).filter(
+                    Q(target_audience='all') | Q(target_audience='students')
+                )
+        # Teachers see announcements for all, teachers, and their courses
+        elif user.role == 'faculty':
+            queryset = queryset.filter(
+                Q(target_audience='all') | Q(target_audience='teachers') | Q(created_by=user)
+            )
+        
+        # Filter by target audience
+        target = self.request.query_params.get('target')
+        if target:
+            queryset = queryset.filter(target_audience=target)
+        
+        # Filter by active status
+        active = self.request.query_params.get('active')
+        if active is not None:
+            queryset = queryset.filter(is_active=active.lower() == 'true')
+        
+        # Filter by department
+        department = self.request.query_params.get('department')
+        if department:
+            queryset = queryset.filter(department_id=department)
+        
+        # Filter by course
+        course = self.request.query_params.get('course')
+        if course:
+            queryset = queryset.filter(course_id=course)
+        
+        return queryset
+    
+    def perform_create(self, serializer):
+        """Automatically set the created_by to current user"""
+        serializer.save(created_by=self.request.user)
+    
+    @action(detail=False, methods=['get'])
+    def my_announcements(self, request):
+        """Get announcements created by the current user"""
+        announcements = Announcement.objects.filter(created_by=request.user)
+        serializer = AnnouncementListSerializer(announcements, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        """Toggle the active status of an announcement"""
+        announcement = self.get_object()
+        announcement.is_active = not announcement.is_active
+        announcement.save()
+        return Response({
+            'announcement_id': str(announcement.announcement_id),
+            'is_active': announcement.is_active
+        })

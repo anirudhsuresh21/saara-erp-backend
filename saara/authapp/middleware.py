@@ -12,6 +12,7 @@ from django.conf import settings
 class SupabaseJWTAuthentication(BaseAuthentication):
     """
     DRF Authentication class for Supabase JWT tokens
+    Also supports development tokens signed with Django SECRET_KEY
     """
     
     def authenticate(self, request):
@@ -23,6 +24,26 @@ class SupabaseJWTAuthentication(BaseAuthentication):
         token = auth_header.replace('Bearer ', '')
         
         try:
+            # First, try to decode as a dev token (signed with SECRET_KEY)
+            if settings.DEBUG:
+                try:
+                    payload = jwt.decode(
+                        token,
+                        settings.SECRET_KEY,
+                        algorithms=['HS256']
+                    )
+                    # This is a dev token, get the user
+                    from saara.authapp.models import User
+                    user_id = payload.get('sub')
+                    
+                    if user_id:
+                        user = User.objects.get(user_id=user_id)
+                        return (user, token)
+                except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
+                    pass  # Not a dev token, try Supabase token
+                except Exception:
+                    pass
+            
             # Decode the Supabase JWT token
             # Token is already validated by Supabase, we just need to extract claims
             payload = jwt.decode(
@@ -40,15 +61,17 @@ class SupabaseJWTAuthentication(BaseAuthentication):
             if not user_id or not email:
                 raise AuthenticationFailed('Invalid token payload')
             
-            # Get or create user
-            user, created = User.objects.get_or_create(
-                user_id=user_id,
-                defaults={
-                    'email': email,
-                    'role': role,
-                    'is_active': True
-                }
-            )
+            # Try to find user by email first (for seeded users), then by Supabase ID
+            try:
+                user = User.objects.get(email=email)
+            except User.DoesNotExist:
+                # Create new user with Supabase ID
+                user = User.objects.create(
+                    user_id=user_id,
+                    email=email,
+                    role=role,
+                    is_active=True
+                )
             
             return (user, token)
             

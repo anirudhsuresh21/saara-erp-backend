@@ -64,20 +64,23 @@ def supabase_login(request):
             options={"verify_signature": False}
         )
         
-        # Get or create Django user
-        user, created = User.objects.get_or_create(
-            user_id=user_data.id,
-            defaults={
-                'email': user_data.email,
-                'role': payload.get('role', 'student'),
-                'is_active': True,
-                'last_login': datetime.now()
-            }
-        )
+        # Get or create Django user - lookup by email first, then by Supabase ID
+        from django.utils import timezone
         
-        if not created:
-            user.last_login = datetime.now()
+        try:
+            # Try to find existing user by email
+            user = User.objects.get(email=user_data.email)
+            user.last_login = timezone.now()
             user.save()
+        except User.DoesNotExist:
+            # Create new user with Supabase ID
+            user = User.objects.create(
+                user_id=user_data.id,
+                email=user_data.email,
+                role=payload.get('role', 'student'),
+                is_active=True,
+                last_login=timezone.now()
+            )
         
         return Response({
             'access_token': access_token,
@@ -259,3 +262,86 @@ def get_allowed_domains(request):
         'allowed_domains': list(domains),
         'count': len(domains)
     }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def dev_login(request):
+    """
+    Development-only login endpoint that bypasses Supabase.
+    Uses local Django user database for authentication.
+    
+    WARNING: Only use this for development/testing. Disable in production!
+    """
+    if not settings.DEBUG:
+        return Response(
+            {'error': 'This endpoint is only available in development mode'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    email = request.data.get('email')
+    password = request.data.get('password')
+    
+    if not email or not password:
+        return Response(
+            {'error': 'Email and password are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        # Find user by email
+        user = User.objects.get(email=email)
+        
+        # Check password using Django's password hasher
+        if not user.check_password(password):
+            return Response(
+                {'error': 'Invalid credentials'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        if not user.is_active:
+            return Response(
+                {'error': 'User account is disabled'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Update last login
+        user.last_login = datetime.now()
+        user.save()
+        
+        # Generate a simple JWT token for development
+        import uuid
+        from datetime import timedelta
+        
+        payload = {
+            'sub': str(user.user_id),
+            'email': user.email,
+            'role': user.role,
+            'iat': datetime.utcnow(),
+            'exp': datetime.utcnow() + timedelta(days=7)
+        }
+        
+        # Use Django secret key for signing (dev only)
+        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+        
+        return Response({
+            'access_token': token,
+            'refresh_token': f'dev_refresh_{uuid.uuid4()}',  # Dummy refresh token
+            'user': {
+                'id': str(user.user_id),
+                'email': user.email,
+                'role': user.role
+            },
+            'warning': 'Using development authentication - not for production!'
+        }, status=status.HTTP_200_OK)
+        
+    except User.DoesNotExist:
+        return Response(
+            {'error': 'Invalid credentials'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

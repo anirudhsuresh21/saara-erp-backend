@@ -4,17 +4,56 @@ from django.core.exceptions import ValidationError
 import uuid
 from saara.authapp.models import User
 
+
+class Institution(models.Model):
+    """Institution/College Model - supports multi-tenancy"""
+    institution_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    short_name = models.CharField(max_length=50, unique=True)  # e.g., "SIES", "DYPATIL"
+    address = models.TextField(null=True, blank=True)
+    city = models.CharField(max_length=100, null=True, blank=True)
+    state = models.CharField(max_length=100, null=True, blank=True)
+    contact_email = models.EmailField(null=True, blank=True)
+    contact_phone = models.CharField(max_length=20, null=True, blank=True)
+    website = models.URLField(null=True, blank=True)
+    logo_url = models.URLField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = "institutions"
+    
+    def __str__(self):
+        return f"{self.name} ({self.short_name})"
+
+
 class Department(models.Model):
     """Department Model"""
-    department_id = models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
-    department_name = models.CharField(max_length=255)
+    PROGRAM_TYPE_CHOICES = [
+        ('ug', 'Undergraduate'),      # BSc, BA, BCom, etc.
+        ('pg', 'Postgraduate'),       # MSc, MA, MCom, MCA, MBA, etc.
+        ('engg', 'Engineering'),      # BTech, BE, MTech, ME
+        ('diploma', 'Diploma'),
+        ('phd', 'Doctoral'),
+        ('other', 'Other'),
+    ]
+    
+    department_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='departments', null=True, blank=True)
+    department_name = models.CharField(max_length=255)  # e.g., "Computer Science", "Management Studies"
+    dept_code = models.CharField(max_length=20, null=True, blank=True)  # e.g., "CS", "MMS", "MCA"
+    program_type = models.CharField(max_length=20, choices=PROGRAM_TYPE_CHOICES, default='ug')
     hod_id = models.CharField(max_length=50, null=True, blank=True)
     
     class Meta:
         db_table = "departments"
+        unique_together = ('institution', 'dept_code', 'program_type')
     
     def __str__(self):
-        return self.department_name
+        program_label = dict(self.PROGRAM_TYPE_CHOICES).get(self.program_type, '')
+        if self.institution:
+            return f"{self.department_name} ({program_label}) - {self.institution.short_name}"
+        return f"{self.department_name} ({program_label})"
     
 class Student(models.Model):
     """Student Profile Model"""
@@ -61,7 +100,7 @@ class Admin(models.Model):
         return f"{self.name} ({self.admin_id})"
     
 class Course(models.Model):
-    course_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_id = models.CharField(primary_key=True, max_length=50)  # Course code like "MCA11", "MMS101"
     course_name = models.CharField(max_length=255)
     credits = models.IntegerField()
     semester = models.IntegerField()
@@ -83,7 +122,27 @@ class CourseFaculty(models.Model):
         
     def __str__(self):
         return f"{self.teacher} teaches {self.course}"
+
+
+class StudentCourse(models.Model):
+    """Student course enrollment/registration"""
+    enrollment_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='course_enrollments')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='student_enrollments')
+    academic_year = models.IntegerField()
+    semester = models.IntegerField()
+    enrollment_date = models.DateField(auto_now_add=True)
+    grade = models.CharField(max_length=5, null=True, blank=True)  # Final grade for the course
     
+    class Meta:
+        db_table = 'student_courses'
+        unique_together = ('student', 'course', 'academic_year', 'semester')
+        ordering = ['-academic_year', '-semester']
+    
+    def __str__(self):
+        return f"{self.student} - {self.course}"
+
+
 class Attendance(models.Model):
     STATUS_CHOICE = [
         ('present', 'Present'),
@@ -106,23 +165,25 @@ class Attendance(models.Model):
         return f"{self.student} - {self.course} - {self.date} - {self.status}"
     
 class FeeStructure(models.Model):
-    """Fee structure for different academic years and semesters"""
+    """Fee structure for different departments, academic years and semesters"""
     fee_id = models.CharField(primary_key=True, max_length=50)
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='fee_structures')
     academic_year = models.IntegerField()
-    semester = models.IntegerField()
+    # semester = models.IntegerField()
     tution_fees = models.DecimalField(max_digits=10, decimal_places=2)
     development_fees = models.DecimalField(max_digits=10, decimal_places=2)
     amount = models.DecimalField(max_digits=10, decimal_places=2, editable=False)
 
     class Meta:
         db_table = 'fee_structure'
+        unique_together = ('department', 'academic_year')
 
     def save(self, *args, **kwargs):
         self.amount = self.tution_fees + self.development_fees
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Fee {self.fee_id} - AY {self.academic_year} - Sem {self.semester}"
+        return f"Fee {self.fee_id} - {self.department.department_name} - AY {self.academic_year}"
 
 
 
@@ -227,3 +288,32 @@ class Result(models.Model):
     
     def __str__(self):
         return f"{self.student} - {self.exam} - {self.grade}"
+
+
+class Announcement(models.Model):
+    """Announcements posted by teachers/admins"""
+    TARGET_CHOICES = [
+        ('all', 'All'),
+        ('students', 'Students Only'),
+        ('teachers', 'Teachers Only'),
+        ('department', 'Department Specific'),
+        ('course', 'Course Specific'),
+    ]
+    
+    announcement_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    content = models.TextField()
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='announcements')
+    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='announcements')
+    course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, blank=True, related_name='announcements')
+    target_audience = models.CharField(max_length=20, choices=TARGET_CHOICES, default='all')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'announcements'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.title} ({self.created_at.strftime('%Y-%m-%d')})"
