@@ -1,24 +1,43 @@
 """
-Authentication views for Supabase integration
+Authentication views using Django's default authentication
+Replaces Supabase integration with local Django authentication
 """
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
-from django.contrib.auth import login
-from supabase import create_client, Client
 from django.conf import settings
 import jwt
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 
 from saara.authapp.models import User, UserSession, AllowedEmailDomain
+
+
+def generate_jwt_token(user):
+    """Generate a JWT token for the user"""
+    payload = {
+        'sub': str(user.user_id),
+        'email': user.email,
+        'role': user.role,
+        'iat': datetime.utcnow(),
+        'exp': datetime.utcnow() + timedelta(days=7)
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+    return token
+
+
+def generate_refresh_token():
+    """Generate a simple refresh token"""
+    return f'refresh_{uuid.uuid4()}'
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def supabase_login(request):
     """
-    Login using Supabase credentials - Only allowed domains
+    Login using Django's local database authentication - Only allowed domains
+    (Named supabase_login for backwards compatibility)
     """
     email = request.data.get('email')
     password = request.data.get('password')
@@ -41,50 +60,34 @@ def supabase_login(request):
         )
     
     try:
-        # Initialize Supabase client
-        supabase: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
-        )
+        # Find user by email
+        user = User.objects.get(email=email)
         
-        # Authenticate with Supabase
-        auth_response = supabase.auth.sign_in_with_password({
-            'email': email,
-            'password': password
-        })
-        
-        # Extract token and user info
-        access_token = auth_response.session.access_token
-        user_data = auth_response.user
-        
-        # Decode token to get user details (without verification to get payload)
-        # The token is already validated by Supabase
-        payload = jwt.decode(
-            access_token,
-            options={"verify_signature": False}
-        )
-        
-        # Get or create Django user - lookup by email first, then by Supabase ID
-        from django.utils import timezone
-        
-        try:
-            # Try to find existing user by email
-            user = User.objects.get(email=user_data.email)
-            user.last_login = timezone.now()
-            user.save()
-        except User.DoesNotExist:
-            # Create new user with Supabase ID
-            user = User.objects.create(
-                user_id=user_data.id,
-                email=user_data.email,
-                role=payload.get('role', 'student'),
-                is_active=True,
-                last_login=timezone.now()
+        # Check password using Django's password hasher
+        if not user.check_password(password):
+            return Response(
+                {'error': 'Invalid credentials'},
+                status=status.HTTP_401_UNAUTHORIZED
             )
+        
+        if not user.is_active:
+            return Response(
+                {'error': 'User account is disabled'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Update last login
+        from django.utils import timezone
+        user.last_login = timezone.now()
+        user.save()
+        
+        # Generate JWT token
+        access_token = generate_jwt_token(user)
+        refresh_token = generate_refresh_token()
         
         return Response({
             'access_token': access_token,
-            'refresh_token': auth_response.session.refresh_token,
+            'refresh_token': refresh_token,
             'user': {
                 'id': str(user.user_id),
                 'email': user.email,
@@ -92,10 +95,15 @@ def supabase_login(request):
             }
         }, status=status.HTTP_200_OK)
         
+    except User.DoesNotExist:
+        return Response(
+            {'error': 'Invalid credentials'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
     except Exception as e:
         return Response(
             {'error': str(e)},
-            status=status.HTTP_401_UNAUTHORIZED
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
@@ -103,7 +111,8 @@ def supabase_login(request):
 @permission_classes([AllowAny])
 def supabase_register(request):
     """
-    Register a new user with Supabase - Only allowed domains
+    Register a new user with Django's local database - Only allowed domains
+    (Named supabase_register for backwards compatibility)
     """
     email = request.data.get('email')
     password = request.data.get('password')
@@ -127,33 +136,22 @@ def supabase_register(request):
             status=status.HTTP_403_FORBIDDEN
         )
     
-    try:
-        # Initialize Supabase client
-        supabase: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
+    # Check if user already exists
+    if User.objects.filter(email=email).exists():
+        return Response(
+            {'error': 'A user with this email already exists'},
+            status=status.HTTP_400_BAD_REQUEST
         )
-        
-        # Register with Supabase
-        auth_response = supabase.auth.sign_up({
-            'email': email,
-            'password': password,
-            'options': {
-                'data': {
-                    'role': role
-                }
-            }
-        })
-        
-        user_data = auth_response.user
-        
+    
+    try:
         # Create Django user
         user = User.objects.create(
-            user_id=user_data.id,
-            email=user_data.email,
+            email=email,
             role=role,
             is_active=True
         )
+        user.set_password(password)
+        user.save()
         
         return Response({
             'message': 'User registered successfully',
@@ -175,27 +173,12 @@ def supabase_register(request):
 @permission_classes([IsAuthenticated])
 def supabase_logout(request):
     """
-    Logout user from Supabase
+    Logout user (invalidate session on client side)
+    (Named supabase_logout for backwards compatibility)
     """
-    try:
-        # Initialize Supabase client
-        supabase: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
-        )
-        
-        # Sign out from Supabase
-        supabase.auth.sign_out()
-        
-        return Response({
-            'message': 'Logged out successfully'
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+    return Response({
+        'message': 'Logged out successfully'
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -220,35 +203,47 @@ def get_current_user(request):
 def refresh_token(request):
     """
     Refresh access token using refresh token
+    For local Django auth, we just generate a new token if the user is valid
     """
-    refresh_token = request.data.get('refresh_token')
+    refresh_token_value = request.data.get('refresh_token')
     
-    if not refresh_token:
+    if not refresh_token_value:
         return Response(
             {'error': 'Refresh token is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    try:
-        # Initialize Supabase client
-        supabase: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
-        )
-        
-        # Refresh the session
-        auth_response = supabase.auth.refresh_session(refresh_token)
-        
-        return Response({
-            'access_token': auth_response.session.access_token,
-            'refresh_token': auth_response.session.refresh_token
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_401_UNAUTHORIZED
-        )
+    # Try to get user from the Authorization header if present
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header.replace('Bearer ', '')
+        try:
+            # Decode without verification to get user info (token might be expired)
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=['HS256'],
+                options={"verify_exp": False}
+            )
+            
+            user_id = payload.get('sub')
+            if user_id:
+                user = User.objects.get(user_id=user_id)
+                if user.is_active:
+                    new_access_token = generate_jwt_token(user)
+                    new_refresh_token = generate_refresh_token()
+                    
+                    return Response({
+                        'access_token': new_access_token,
+                        'refresh_token': new_refresh_token
+                    }, status=status.HTTP_200_OK)
+        except (jwt.InvalidTokenError, User.DoesNotExist):
+            pass
+    
+    return Response(
+        {'error': 'Invalid refresh token. Please login again.'},
+        status=status.HTTP_401_UNAUTHORIZED
+    )
 
 
 @api_view(['GET'])
@@ -268,80 +263,7 @@ def get_allowed_domains(request):
 @permission_classes([AllowAny])
 def dev_login(request):
     """
-    Development-only login endpoint that bypasses Supabase.
-    Uses local Django user database for authentication.
-    
-    WARNING: Only use this for development/testing. Disable in production!
+    Development login endpoint - same as supabase_login (Django auth)
+    Kept for backwards compatibility
     """
-    if not settings.DEBUG:
-        return Response(
-            {'error': 'This endpoint is only available in development mode'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    email = request.data.get('email')
-    password = request.data.get('password')
-    
-    if not email or not password:
-        return Response(
-            {'error': 'Email and password are required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    try:
-        # Find user by email
-        user = User.objects.get(email=email)
-        
-        # Check password using Django's password hasher
-        if not user.check_password(password):
-            return Response(
-                {'error': 'Invalid credentials'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        if not user.is_active:
-            return Response(
-                {'error': 'User account is disabled'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Update last login
-        user.last_login = datetime.now()
-        user.save()
-        
-        # Generate a simple JWT token for development
-        import uuid
-        from datetime import timedelta
-        
-        payload = {
-            'sub': str(user.user_id),
-            'email': user.email,
-            'role': user.role,
-            'iat': datetime.utcnow(),
-            'exp': datetime.utcnow() + timedelta(days=7)
-        }
-        
-        # Use Django secret key for signing (dev only)
-        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
-        
-        return Response({
-            'access_token': token,
-            'refresh_token': f'dev_refresh_{uuid.uuid4()}',  # Dummy refresh token
-            'user': {
-                'id': str(user.user_id),
-                'email': user.email,
-                'role': user.role
-            },
-            'warning': 'Using development authentication - not for production!'
-        }, status=status.HTTP_200_OK)
-        
-    except User.DoesNotExist:
-        return Response(
-            {'error': 'Invalid credentials'},
-            status=status.HTTP_401_UNAUTHORIZED
-        )
-    except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return supabase_login(request)

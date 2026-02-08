@@ -124,3 +124,51 @@ class IsOwnerOrAdmin(BasePermission):
                 return obj.student.user.user_id == request.user.user_id
         
         return False
+
+
+class IsStudentSubmissionPermission(BasePermission):
+    """
+    Permission class for assignment submissions:
+    - Admin: Full access (CRUD)
+    - Teacher/Faculty: Full access (CRUD) - can grade submissions
+    - Students: Can CREATE (submit) and READ their own submissions
+    """
+    message = "You don't have permission to perform this action."
+    
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        user_role = getattr(request.user, 'role', None)
+        
+        # Admin and faculty have full access
+        if user_role in ['admin', 'faculty']:
+            return True
+        
+        # Students can read all and create their own submissions
+        if user_role == 'student':
+            if request.method in SAFE_METHODS:
+                return True
+            # Allow POST (create) for students
+            if request.method == 'POST':
+                return True
+        
+        return False
+    
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        user_role = getattr(request.user, 'role', None)
+        
+        # Admin and faculty have full access
+        if user_role in ['admin', 'faculty']:
+            return True
+        
+        # Students can only access their own submissions
+        if user_role == 'student':
+            if hasattr(obj, 'student') and obj.student:
+                if hasattr(obj.student, 'user') and obj.student.user:
+                    return obj.student.user.user_id == request.user.user_id
+        
+        return False

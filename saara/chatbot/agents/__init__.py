@@ -11,7 +11,8 @@ from .admin_agents import (
     AdminAttendanceAgent,
     AdminFeesAgent,
     AdminAssignmentAgent,
-    AdminResultsAgent
+    AdminResultsAgent,
+    AdminUserManagementAgent
 )
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     'AdminFeesAgent',
     'AdminAssignmentAgent',
     'AdminResultsAgent',
+    'AdminUserManagementAgent',
 ]
 

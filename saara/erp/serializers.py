@@ -37,21 +37,25 @@ class DepartmentSerializer(serializers.ModelSerializer):
 class StudentSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source='department.department_name', read_only=True)
     enrolled_courses = serializers.ListField(
-        child=serializers.UUIDField(),
+        child=serializers.CharField(),
         write_only=True,
         required=False,
-        help_text="List of course IDs to enroll the student in"
+        help_text="List of course IDs (course codes) to enroll the student in"
     )
     course_enrollments = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = Student
         fields = [
-            'student_id', 'user', 'first_name', 'middle_name', 'last_name',
+            'student_id', 'roll_no', 'user', 'first_name', 'middle_name', 'last_name',
             'department', 'department_name', 'program', 'year_of_study', 'semester',
             'enrolled_courses', 'course_enrollments'
         ]
         read_only_fields = ['student_id']
+        extra_kwargs = {
+            'middle_name': {'required': False, 'allow_blank': True},
+            'roll_no': {'required': False, 'allow_blank': True}
+        }
     
     def get_course_enrollments(self, obj):
         enrollments = StudentCourse.objects.filter(student=obj).select_related('course')
@@ -120,13 +124,26 @@ class StudentListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views"""
     department_name = serializers.CharField(source='department.department_name', read_only=True)
     full_name = serializers.SerializerMethodField()
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    course_enrollments = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = Student
-        fields = ['student_id', 'full_name', 'department_name', 'program', 'year_of_study', 'semester']
+        fields = ['student_id', 'roll_no', 'first_name', 'middle_name', 'last_name', 'full_name', 'user_email',
+                  'department', 'department_name', 'program', 'year_of_study', 'semester', 'course_enrollments']
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.middle_name} {obj.last_name}".strip()
+    
+    def get_course_enrollments(self, obj):
+        enrollments = StudentCourse.objects.filter(student=obj).select_related('course')
+        return [{
+            'enrollment_id': str(e.enrollment_id),
+            'course_id': str(e.course.course_id),
+            'course_name': e.course.course_name,
+            'academic_year': e.academic_year,
+            'semester': e.semester
+        } for e in enrollments]
 
 
 class TeacherSerializer(serializers.ModelSerializer):
@@ -144,10 +161,11 @@ class TeacherListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views"""
     department_name = serializers.CharField(source='department.department_name', read_only=True)
     full_name = serializers.SerializerMethodField()
+    user_email = serializers.CharField(source='user.email', read_only=True)
     
     class Meta:
         model = Teacher
-        fields = ['teacher_id', 'full_name', 'department_name', 'designation']
+        fields = ['teacher_id', 'full_name', 'user_email', 'department_name', 'designation']
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
@@ -169,7 +187,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'course_id', 'course_name', 'credits', 'semester',
             'department', 'department_name'
         ]
-        read_only_fields = ['course_id']
+        # course_id is required as it's a CharField primary key (course code like "MCA11")
 
 
 class CourseFacultySerializer(serializers.ModelSerializer):
@@ -232,7 +250,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 class BulkAttendanceSerializer(serializers.Serializer):
     """Serializer for marking attendance in bulk"""
-    course = serializers.UUIDField()
+    course = serializers.CharField(max_length=50)  # Course ID like "MCA201"
     date = serializers.DateField()
     attendance_records = serializers.ListField(
         child=serializers.DictField(
@@ -256,12 +274,15 @@ class FeeStructureSerializer(serializers.ModelSerializer):
 class StudentFeesSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField(read_only=True)
     fee_details = serializers.SerializerMethodField(read_only=True)
+    fee_structure_name = serializers.SerializerMethodField(read_only=True)
+    balance = serializers.DecimalField(source='due_amount', max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = StudentFees
         fields = [
             'payment_id', 'student', 'student_name', 'fee',
-            'fee_details', 'amount_paid', 'due_amount', 'status'
+            'fee_details', 'fee_structure_name', 'amount_paid', 'due_amount', 'balance',
+            'status', 'receipt_number', 'payment_date', 'description'
         ]
         read_only_fields = ['payment_id']
     
@@ -274,11 +295,16 @@ class StudentFeesSerializer(serializers.ModelSerializer):
             'academic_year': obj.fee.academic_year,
             'total_amount': str(obj.fee.amount)
         }
+    
+    def get_fee_structure_name(self, obj):
+        return f"{obj.fee.department.department_name} - AY {obj.fee.academic_year}"
 
 
 class AssignmentSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='course.course_name', read_only=True)
     created_by_name = serializers.SerializerMethodField(read_only=True)
+    file_url = serializers.CharField(required=False, allow_blank=True, default='')
+    description = serializers.CharField(required=False, allow_blank=True, default='')
     
     class Meta:
         model = Assignment
@@ -370,3 +396,57 @@ class AnnouncementListSerializer(serializers.ModelSerializer):
     
     def get_date(self, obj):
         return obj.created_at.strftime('%Y-%m-%d')
+
+
+# Import new models for Timetable and AcademicCalendar
+from .models import Timetable, AcademicCalendar, LeaveRequest
+
+
+class TimetableSerializer(serializers.ModelSerializer):
+    """Serializer for timetable entries"""
+    course_name = serializers.CharField(source='course.course_name', read_only=True)
+    course_code = serializers.CharField(source='course.course_id', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Timetable
+        fields = [
+            'timetable_id', 'course', 'course_name', 'course_code',
+            'teacher', 'teacher_name', 'day_of_week',
+            'start_time', 'end_time', 'room_number', 'is_active'
+        ]
+        read_only_fields = ['timetable_id']
+    
+    def get_teacher_name(self, obj):
+        if obj.teacher:
+            return f"{obj.teacher.first_name} {obj.teacher.last_name}"
+        return "TBA"
+
+
+class AcademicCalendarSerializer(serializers.ModelSerializer):
+    """Serializer for academic calendar events"""
+    department_name = serializers.CharField(source='department.department_name', read_only=True)
+    
+    class Meta:
+        model = AcademicCalendar
+        fields = [
+            'event_id', 'title', 'description', 'event_type',
+            'start_date', 'end_date', 'department', 'department_name',
+            'is_active', 'created_at'
+        ]
+        read_only_fields = ['event_id', 'created_at']
+
+
+class LeaveRequestSerializer(serializers.ModelSerializer):
+    """Serializer for leave requests"""
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    approved_by_email = serializers.CharField(source='approved_by.email', read_only=True)
+    
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            'leave_id', 'user', 'user_email', 'leave_type',
+            'start_date', 'end_date', 'reason', 'status',
+            'approved_by', 'approved_by_email', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['leave_id', 'created_at', 'updated_at']

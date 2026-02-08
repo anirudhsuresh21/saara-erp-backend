@@ -209,6 +209,81 @@ Guidelines:
 - Keep it brief but friendly
 - Use emojis sparingly (1-2 max)
 """
+    elif intent == "low_attendance_students":
+        if is_admin_data:
+            prompt = f"""
+You are SARAA, a friendly college ERP chatbot assistant for administrators.
+
+Convert the following low attendance report into a natural, conversational response:
+
+{data}
+
+Guidelines:
+- Be professional yet friendly
+- Clearly state the threshold being used
+- Show the total count of affected students prominently
+- Summarize by department
+- List students with lowest attendance first
+- Suggest follow-up actions (counseling, notifications)
+- Keep it informative but actionable
+- Use emojis sparingly (1-2 max)
+"""
+        else:  # Teacher
+            prompt = f"""
+You are SARAA, a friendly college ERP chatbot assistant for teachers.
+
+Convert the following low attendance report into a natural, conversational response:
+
+{data}
+
+Guidelines:
+- Be professional yet friendly
+- Clearly state the threshold being used
+- Show the count of students per course
+- List students with their attendance percentages
+- Suggest reaching out to affected students
+- If all students are above threshold, celebrate!
+- Keep it informative and actionable
+- Use emojis sparingly (1-2 max)
+"""
+    elif intent == "pending_submissions":
+        if is_admin_data:
+            prompt = f"""
+You are SARAA, a friendly college ERP chatbot assistant for administrators.
+
+Convert the following pending submission report into a natural, conversational response:
+
+{data}
+
+Guidelines:
+- Be professional yet friendly
+- Highlight overdue assignments with urgency
+- Show assignment details with counts
+- List students who haven't submitted
+- Summarize by course if multiple
+- Suggest follow-up actions
+- If all submitted, celebrate!
+- Use emojis sparingly (1-2 max)
+"""
+        else:  # Teacher
+            prompt = f"""
+You are SARAA, a friendly college ERP chatbot assistant for teachers.
+
+Convert the following pending submission report into a natural, conversational response:
+
+{data}
+
+Guidelines:
+- Be professional yet friendly
+- Highlight overdue assignments with urgency
+- Show each assignment with pending count
+- List students who haven't submitted clearly
+- Include roll numbers for easy identification
+- Suggest sending reminders
+- If all students submitted, congratulate yourself and them!
+- Keep it actionable
+- Use emojis sparingly (1-2 max)
+"""
     else:
         prompt = f"""
 You are SARAA, a friendly college ERP chatbot assistant.
@@ -312,23 +387,82 @@ Course-wise breakdown available in detailed view."""
 
         elif is_teacher:
             assignments = data.get('assignments', [])
-            assignment_text = "\n".join([f"  • {a['title']} ({a['course_name']}): {a['total_submissions']} submitted, {a['pending_grading']} pending grading" for a in assignments[:5]])
-            return f"""📝 **Your Assignments**
+            response = f"""📝 **Your Assignments**
 
 Teacher: {data.get('teacher_name', 'Teacher')}
 Total Assignments: {data.get('total_assignments', 0)}
 
-{assignment_text if assignment_text else 'No assignments found.'}"""
+"""
+            for a in assignments[:5]:
+                response += f"📌 **{a['title']}** ({a['course_name']})\n"
+                response += f"   Due: {a['due_date']}\n"
+                response += f"   Enrolled: {a.get('total_enrolled', 0)} | Submitted: {a['total_submissions']} | Graded: {a.get('graded', 0)}\n"
+                
+                # Show pending students
+                pending_students = a.get('pending_students', [])
+                pending_count = a.get('pending_submission_count', 0)
+                
+                if pending_count > 0:
+                    response += f"   ⚠️ **{pending_count} student(s) yet to submit:**\n"
+                    for student in pending_students[:5]:
+                        response += f"      • {student['name']}\n"
+                    if pending_count > 5:
+                        response += f"      ... and {pending_count - 5} more\n"
+                else:
+                    response += f"   ✅ All students have submitted!\n"
+                
+                response += "\n"
+            
+            if len(assignments) > 5:
+                response += f"... and {len(assignments) - 5} more assignments"
+            
+            return response.strip() if assignments else "No assignments found."
 
         else:
-            return f"""📝 **Assignment Summary**
+            assignments = data.get('assignments', [])
+            pending_assignments = [a for a in assignments if a.get('status') == 'Pending']
+            overdue_assignments = [a for a in assignments if a.get('status') == 'Overdue']
+            submitted_assignments = [a for a in assignments if a.get('status') == 'Submitted']
+            
+            response = f"""📝 **Assignment Summary**
 
 - Total Assignments: {data.get('total_assignments', 0)}
 - Submitted: {data.get('submitted_assignments', 0)}
 - Pending: {data.get('pending_assignments', 0)}
 - Overdue: {data.get('overdue_assignments', 0)}
-
-{"All assignments submitted! Great work! 🌟" if data.get('pending_assignments', 0) == 0 else "Don't forget to complete your pending assignments!"}"""
+"""
+            
+            # Show overdue assignments first (urgent)
+            if overdue_assignments:
+                response += "\n🚨 **Overdue Assignments (Urgent!):**\n"
+                for a in overdue_assignments[:5]:
+                    response += f"  • **{a['title']}** ({a['course_name']})\n"
+                    response += f"    Due: {a['due_date']} | By: {a.get('created_by', 'N/A')}\n"
+            
+            # Show pending assignments
+            if pending_assignments:
+                response += "\n⏳ **Pending Assignments:**\n"
+                for a in pending_assignments[:5]:
+                    response += f"  • **{a['title']}** ({a['course_name']})\n"
+                    response += f"    Due: {a['due_date']} | By: {a.get('created_by', 'N/A')}\n"
+            
+            # Show submitted assignments (brief)
+            if submitted_assignments:
+                response += "\n✅ **Submitted Assignments:**\n"
+                for a in submitted_assignments[:5]:
+                    score_text = f" | Score: {a.get('score')}" if a.get('score') else ""
+                    response += f"  • {a['title']} ({a['course_name']}){score_text}\n"
+                if len(submitted_assignments) > 5:
+                    response += f"  ... and {len(submitted_assignments) - 5} more\n"
+            
+            if data.get('pending_assignments', 0) == 0:
+                response += "\n🌟 All assignments submitted! Great work!"
+            elif overdue_assignments:
+                response += "\n⚠️ Please submit your overdue assignments immediately!"
+            else:
+                response += "\n💡 Don't forget to complete your pending assignments before the deadline!"
+            
+            return response
 
     elif intent == "results":
         if is_admin:
@@ -361,6 +495,135 @@ Total Exams: {data.get('total_exams', 0)}
 
 {"Excellent performance! Keep it up! 🏆" if data.get('overall_percentage', 0) >= 60 else "You can do better! Keep studying! 📚"}"""
 
+    elif intent == "low_attendance_students":
+        if is_admin:
+            threshold = data.get('threshold', 75)
+            total = data.get('total_students_below_threshold', 0)
+            students = data.get('students', [])
+            dept_summary = data.get('department_summary', [])
+            
+            if total == 0:
+                return f"""✅ **Attendance Report**
+
+Administrator: {data.get('admin_name', 'Admin')}
+
+Great news! No students have attendance below {threshold}% across the institution. 🎉"""
+            
+            response = f"""⚠️ **Low Attendance Report**
+
+Administrator: {data.get('admin_name', 'Admin')}
+Threshold: Below {threshold}%
+Total Students: **{total}**
+
+**Department-wise:**
+"""
+            for dept in dept_summary[:5]:
+                response += f"  • {dept['department']}: {dept['count']} student(s)\n"
+            
+            response += f"\n**Students with Lowest Attendance:**\n"
+            for s in students[:10]:
+                response += f"  • {s['name']} ({s['roll_no']}): **{s['attendance_percentage']}%** - {s['department']}\n"
+            
+            if total > 10:
+                response += f"\n... and {total - 10} more students"
+            
+            return response
+
+        else:  # Teacher
+            threshold = data.get('threshold', 75)
+            courses = data.get('courses_summary', [])
+            total = data.get('total_students_below_threshold', 0)
+            
+            if total == 0:
+                return f"""✅ **Attendance Report**
+
+Teacher: {data.get('teacher_name', 'Teacher')}
+
+Great news! No students have attendance below {threshold}% in your courses. 🎉"""
+            
+            response = f"""⚠️ **Low Attendance Report**
+
+Teacher: {data.get('teacher_name', 'Teacher')}
+Threshold: Below {threshold}%
+Total Students: **{total}**
+
+"""
+            for course in courses:
+                response += f"📚 **{course['course_name']}** ({course['students_count']} students below {threshold}%)\n"
+                for s in course['students'][:5]:
+                    response += f"  • {s['name']} ({s['roll_no']}): **{s['attendance_percentage']}%** (Absent: {s['absent']}/{s['total']})\n"
+                if course['students_count'] > 5:
+                    response += f"  ... and {course['students_count'] - 5} more\n"
+                response += "\n"
+            
+            return response.strip()
+
+    elif intent == "pending_submissions":
+        if is_admin:
+            total_assignments = data.get('total_assignments_with_pending', 0)
+            total_students = data.get('total_pending_students', 0)
+            assignments = data.get('assignments_summary', [])
+            
+            if total_assignments == 0:
+                return f"""✅ **Assignment Submission Report**
+
+Administrator: {data.get('admin_name', 'Admin')}
+
+All students have submitted their assignments! 🎉"""
+            
+            response = f"""📝 **Pending Submissions Report**
+
+Administrator: {data.get('admin_name', 'Admin')}
+Assignments with Pending: **{total_assignments}**
+Total Students Yet to Submit: **{total_students}**
+
+"""
+            for a in assignments[:5]:
+                overdue_tag = " 🚨 OVERDUE" if a.get('is_overdue') else ""
+                response += f"📌 **{a['assignment_title']}**{overdue_tag}\n"
+                response += f"   Course: {a['course_name']} | Due: {a['due_date']}\n"
+                response += f"   {a['submitted_count']}/{a['total_enrolled']} submitted | **{a['pending_count']} pending**\n"
+                response += f"   Students remaining:\n"
+                for s in a['pending_students'][:5]:
+                    response += f"     • {s['name']} ({s['roll_no']})\n"
+                if a['pending_count'] > 5:
+                    response += f"     ... and {a['pending_count'] - 5} more\n"
+                response += "\n"
+            
+            return response.strip()
+
+        else:  # Teacher
+            total_assignments = data.get('total_assignments_with_pending', 0)
+            total_students = data.get('total_pending_students', 0)
+            assignments = data.get('assignments_summary', [])
+            
+            if total_assignments == 0:
+                return f"""✅ **Assignment Submission Report**
+
+Teacher: {data.get('teacher_name', 'Teacher')}
+
+All students have submitted their assignments! Great work! 🎉"""
+            
+            response = f"""📝 **Pending Submissions Report**
+
+Teacher: {data.get('teacher_name', 'Teacher')}
+Assignments with Pending: **{total_assignments}**
+Total Students Yet to Submit: **{total_students}**
+
+"""
+            for a in assignments:
+                overdue_tag = " 🚨 OVERDUE" if a.get('is_overdue') else ""
+                response += f"📌 **{a['assignment_title']}**{overdue_tag}\n"
+                response += f"   Course: {a['course_name']} | Due: {a['due_date']}\n"
+                response += f"   {a['submitted_count']}/{a['total_enrolled']} submitted | **{a['pending_count']} pending**\n"
+                response += f"   Students remaining:\n"
+                for s in a['pending_students'][:10]:
+                    response += f"     • {s['name']} ({s['roll_no']})\n"
+                if a['pending_count'] > 10:
+                    response += f"     ... and {a['pending_count'] - 10} more\n"
+                response += "\n"
+            
+            return response.strip()
+
     else:
-        return f"Here's what I found: {data}"
         return f"Here's what I found: {data}"

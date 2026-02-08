@@ -7,7 +7,7 @@ from django.db.models import Q
 from .models import (
     Institution, Department, Student, Teacher, Admin, Course, CourseFaculty, StudentCourse,
     Attendance, FeeStructure, StudentFees, Assignment,
-    AssignmentSubmission, Exam, Result, Announcement
+    AssignmentSubmission, Exam, Result, Announcement, Timetable, AcademicCalendar, LeaveRequest
 )
 from .serializers import (
     InstitutionSerializer, DepartmentSerializer, StudentSerializer, StudentListSerializer,
@@ -16,9 +16,10 @@ from .serializers import (
     StudentCourseListSerializer, AttendanceSerializer,
     BulkAttendanceSerializer, FeeStructureSerializer, StudentFeesSerializer,
     AssignmentSerializer, AssignmentSubmissionSerializer,
-    ExamSerializer, ResultSerializer, AnnouncementSerializer, AnnouncementListSerializer
+    ExamSerializer, ResultSerializer, AnnouncementSerializer, AnnouncementListSerializer,
+    TimetableSerializer, AcademicCalendarSerializer, LeaveRequestSerializer
 )
-from .permissions import IsAdminOrReadOnly, IsAdminOrTeacher
+from .permissions import IsAdminOrReadOnly, IsAdminOrTeacher, IsStudentSubmissionPermission
 
 
 class InstitutionViewSet(viewsets.ModelViewSet):
@@ -111,6 +112,16 @@ class StudentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         
+        # Filter by user
+        user_id = self.request.query_params.get('user')
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        
+        # Filter by user email
+        email = self.request.query_params.get('email')
+        if email:
+            queryset = queryset.filter(user__email=email)
+        
         # Filter by department
         department = self.request.query_params.get('department')
         if department:
@@ -181,16 +192,106 @@ class TeacherViewSet(viewsets.ModelViewSet):
         if department:
             queryset = queryset.filter(department_id=department)
         
+        # Filter by user ID
+        user_id = self.request.query_params.get('user')
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        
+        # Filter by user email
+        email = self.request.query_params.get('email')
+        if email:
+            queryset = queryset.filter(user__email=email)
+        
         return queryset
     
     @action(detail=True, methods=['get'])
     def courses(self, request, pk=None):
         """Get courses taught by a specific teacher"""
         teacher = self.get_object()
-        course_faculty = CourseFaculty.objects.filter(teacher=teacher).select_related('course')
+        course_faculty = CourseFaculty.objects.filter(teacher=teacher).select_related('course', 'course__department')
         courses = [cf.course for cf in course_faculty]
         serializer = CourseSerializer(courses, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def dashboard(self, request, pk=None):
+        """Get comprehensive dashboard data for a teacher: courses, students, assignments"""
+        teacher = self.get_object()
+        
+        # Get courses taught by this teacher
+        course_faculty = CourseFaculty.objects.filter(teacher=teacher).select_related('course', 'course__department')
+        courses = [cf.course for cf in course_faculty]
+        course_ids = [c.course_id for c in courses]
+        
+        # Get students enrolled in teacher's courses
+        student_enrollments = StudentCourse.objects.filter(
+            course_id__in=course_ids
+        ).select_related('student', 'student__user', 'course')
+        
+        # Get unique students
+        students_dict = {}
+        for enrollment in student_enrollments:
+            student = enrollment.student
+            if student.student_id not in students_dict:
+                students_dict[student.student_id] = {
+                    'student_id': str(student.student_id),
+                    'first_name': student.first_name,
+                    'last_name': student.last_name,
+                    'email': student.user.email if student.user else None,
+                    'semester': student.semester,
+                    'courses': []
+                }
+            students_dict[student.student_id]['courses'].append({
+                'course_id': enrollment.course.course_id,
+                'course_name': enrollment.course.course_name
+            })
+        
+        # Get assignments for teacher's courses
+        assignments = Assignment.objects.filter(
+            course_id__in=course_ids
+        ).select_related('course').order_by('-due_date')
+        
+        # Build response
+        courses_data = []
+        for course in courses:
+            course_students = [
+                s for s in students_dict.values() 
+                if any(c['course_id'] == course.course_id for c in s['courses'])
+            ]
+            course_assignments = [
+                {
+                    'assignment_id': str(a.assignments_id),
+                    'title': a.title,
+                    'due_date': a.due_date.isoformat() if a.due_date else None,
+                    'description': a.description[:100] if a.description else ''
+                }
+                for a in assignments if a.course_id == course.course_id
+            ]
+            
+            courses_data.append({
+                'course_id': course.course_id,
+                'course_name': course.course_name,
+                'credits': course.credits,
+                'semester': course.semester,
+                'department_name': course.department.department_name if course.department else None,
+                'student_count': len(course_students),
+                'students': course_students,
+                'assignments': course_assignments,
+                'assignment_count': len(course_assignments)
+            })
+        
+        return Response({
+            'teacher': {
+                'teacher_id': teacher.teacher_id,
+                'name': f"{teacher.first_name} {teacher.last_name}",
+                'department': teacher.department.department_name if teacher.department else None,
+                'designation': teacher.designation
+            },
+            'courses': courses_data,
+            'total_courses': len(courses),
+            'total_students': len(students_dict),
+            'total_assignments': assignments.count()
+        })
 
 
 class AdminViewSet(viewsets.ModelViewSet):
@@ -544,6 +645,12 @@ class AssignmentViewSet(viewsets.ModelViewSet):
         if teacher:
             queryset = queryset.filter(created_by_id=teacher)
         
+        # Filter by student - get assignments for courses the student is enrolled in
+        student = self.request.query_params.get('student')
+        if student:
+            enrolled_courses = StudentCourse.objects.filter(student_id=student).values_list('course_id', flat=True)
+            queryset = queryset.filter(course_id__in=enrolled_courses)
+        
         return queryset
     
     @action(detail=True, methods=['get'])
@@ -562,11 +669,11 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
     Permissions:
     - Admin: Full access (CRUD)
     - Teacher: Full access (CRUD) - can grade submissions
-    - Students: Read-only
+    - Students: Can CREATE and READ their own submissions
     """
     queryset = AssignmentSubmission.objects.select_related('assignment', 'student').all()
     serializer_class = AssignmentSubmissionSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrTeacher]
+    permission_classes = [IsAuthenticated, IsStudentSubmissionPermission]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ['submitted_date', 'score']
     ordering = ['-submitted_date']
@@ -752,3 +859,201 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             'announcement_id': str(announcement.announcement_id),
             'is_active': announcement.is_active
         })
+
+
+class TimetableViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Timetable/Schedule
+    
+    Permissions:
+    - Admin: Full access (CRUD)
+    - Teachers: Read + their own schedule
+    - Students: Read their enrolled courses schedule
+    """
+    queryset = Timetable.objects.all()
+    serializer_class = TimetableSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['course__course_name', 'teacher__first_name', 'room_number']
+    ordering_fields = ['day_of_week', 'start_time']
+    ordering = ['day_of_week', 'start_time']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset().filter(is_active=True)
+        user = self.request.user
+        
+        # Students see timetable for their enrolled courses
+        if user.role == 'student':
+            try:
+                student = Student.objects.get(user=user)
+                enrolled_course_ids = StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
+                queryset = queryset.filter(course__course_id__in=enrolled_course_ids)
+            except Student.DoesNotExist:
+                queryset = queryset.none()
+        
+        # Teachers see timetable for their courses
+        elif user.role == 'faculty':
+            try:
+                teacher = Teacher.objects.get(user=user)
+                queryset = queryset.filter(teacher=teacher)
+            except Teacher.DoesNotExist:
+                queryset = queryset.none()
+        
+        # Filter by day
+        day = self.request.query_params.get('day_of_week')
+        if day:
+            queryset = queryset.filter(day_of_week=day.lower())
+        
+        # Filter by course
+        course = self.request.query_params.get('course')
+        if course:
+            queryset = queryset.filter(course_id=course)
+        
+        return queryset
+    
+    @action(detail=False, methods=['get'])
+    def my_timetable(self, request):
+        """Get timetable for current user (student or teacher)"""
+        user = request.user
+        
+        if user.role == 'student':
+            try:
+                student = Student.objects.get(user=user)
+                enrolled_course_ids = StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
+                timetable = Timetable.objects.filter(
+                    course__course_id__in=enrolled_course_ids,
+                    is_active=True
+                ).select_related('course', 'teacher').order_by('day_of_week', 'start_time')
+            except Student.DoesNotExist:
+                return Response([])
+        elif user.role == 'faculty':
+            try:
+                teacher = Teacher.objects.get(user=user)
+                timetable = Timetable.objects.filter(
+                    teacher=teacher,
+                    is_active=True
+                ).select_related('course').order_by('day_of_week', 'start_time')
+            except Teacher.DoesNotExist:
+                return Response([])
+        else:
+            # Admin sees all
+            timetable = Timetable.objects.filter(is_active=True).select_related('course', 'teacher').order_by('day_of_week', 'start_time')[:50]
+        
+        serializer = TimetableSerializer(timetable, many=True)
+        return Response(serializer.data)
+
+
+class AcademicCalendarViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Academic Calendar Events
+    
+    Permissions:
+    - Admin: Full access (CRUD)
+    - Others: Read-only
+    """
+    queryset = AcademicCalendar.objects.all()
+    serializer_class = AcademicCalendarSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'description']
+    ordering_fields = ['start_date', 'event_type']
+    ordering = ['start_date']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset().filter(is_active=True)
+        user = self.request.user
+        
+        # Filter by department if student/teacher
+        if user.role in ['student', 'faculty']:
+            try:
+                if user.role == 'student':
+                    profile = Student.objects.get(user=user)
+                else:
+                    profile = Teacher.objects.get(user=user)
+                
+                if profile.department:
+                    queryset = queryset.filter(
+                        Q(department__isnull=True) | Q(department=profile.department)
+                    )
+            except (Student.DoesNotExist, Teacher.DoesNotExist):
+                pass
+        
+        # Filter by event type
+        event_type = self.request.query_params.get('event_type')
+        if event_type:
+            queryset = queryset.filter(event_type=event_type)
+        
+        # Filter upcoming only
+        upcoming = self.request.query_params.get('upcoming')
+        if upcoming and upcoming.lower() == 'true':
+            from datetime import date
+            queryset = queryset.filter(start_date__gte=date.today())
+        
+        return queryset
+    
+    @action(detail=False, methods=['get'])
+    def upcoming(self, request):
+        """Get upcoming events"""
+        from datetime import date
+        events = self.get_queryset().filter(start_date__gte=date.today()).order_by('start_date')[:20]
+        serializer = AcademicCalendarSerializer(events, many=True)
+        return Response(serializer.data)
+
+
+class LeaveRequestViewSet(viewsets.ModelViewSet):
+    """
+    CRUD operations for Leave Requests
+    
+    Permissions:
+    - Users can create/view their own leave requests
+    - Admin can view/approve/reject all leave requests
+    """
+    queryset = LeaveRequest.objects.all()
+    serializer_class = LeaveRequestSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['created_at', 'start_date', 'status']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Non-admins see only their own requests
+        if user.role != 'admin':
+            queryset = queryset.filter(user=user)
+        
+        # Filter by status
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        return queryset
+    
+    def perform_create(self, serializer):
+        """Automatically set the user to current user"""
+        serializer.save(user=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a leave request (Admin only)"""
+        if request.user.role != 'admin':
+            return Response({'error': 'Only admins can approve leave requests'}, status=status.HTTP_403_FORBIDDEN)
+        
+        leave = self.get_object()
+        leave.status = 'approved'
+        leave.approved_by = request.user
+        leave.save()
+        return Response({'status': 'approved', 'leave_id': str(leave.leave_id)})
+    
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a leave request (Admin only)"""
+        if request.user.role != 'admin':
+            return Response({'error': 'Only admins can reject leave requests'}, status=status.HTTP_403_FORBIDDEN)
+        
+        leave = self.get_object()
+        leave.status = 'rejected'
+        leave.approved_by = request.user
+        leave.save()
+        return Response({'status': 'rejected', 'leave_id': str(leave.leave_id)})

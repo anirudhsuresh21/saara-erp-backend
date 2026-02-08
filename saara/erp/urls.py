@@ -4,7 +4,8 @@ from .views import (
     InstitutionViewSet, DepartmentViewSet, StudentViewSet, TeacherViewSet, AdminViewSet,
     CourseViewSet, CourseFacultyViewSet, StudentCourseViewSet, AttendanceViewSet,
     FeeStructureViewSet, StudentFeesViewSet, AssignmentViewSet,
-    AssignmentSubmissionViewSet, ExamViewSet, ResultViewSet, AnnouncementViewSet
+    AssignmentSubmissionViewSet, ExamViewSet, ResultViewSet, AnnouncementViewSet,
+    TimetableViewSet, AcademicCalendarViewSet, LeaveRequestViewSet
 )
 
 router = DefaultRouter()
@@ -26,6 +27,9 @@ router.register(r'submissions', AssignmentSubmissionViewSet, basename='submissio
 router.register(r'exams', ExamViewSet, basename='exam')
 router.register(r'results', ResultViewSet, basename='result')
 router.register(r'announcements', AnnouncementViewSet, basename='announcement')
+router.register(r'timetables', TimetableViewSet, basename='timetable')
+router.register(r'academic-calendar', AcademicCalendarViewSet, basename='academic-calendar')
+router.register(r'leave-requests', LeaveRequestViewSet, basename='leave-request')
 
 urlpatterns = [
     path('', include(router.urls)),

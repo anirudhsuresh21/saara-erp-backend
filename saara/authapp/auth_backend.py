@@ -4,40 +4,42 @@ from django.conf import settings
 from saara.authapp.models import User
 
 
-class SupabaseAuthBackend(BaseBackend):
+class DjangoJWTAuthBackend(BaseBackend):
     """
-    Authenticate against Supabase JWT tokens
+    Authenticate against Django JWT tokens signed with SECRET_KEY
     """
     def authenticate(self, request, token=None):
         if token is None:
             return None
         
         try:
-            # Decode the Supabase JWT token
-            # Token is already validated by Supabase, we just need to extract claims
+            # Decode the JWT token using Django's SECRET_KEY
             payload = jwt.decode(
                 token,
-                options={"verify_signature": False}
+                settings.SECRET_KEY,
+                algorithms=['HS256']
             )
             
             # Extract user info from Token
             user_id = payload.get('sub')
             email = payload.get('email')
-            role = payload.get('role','student')
             
-            if not user_id or not email:
+            if not user_id and not email:
                 return None
             
-            # Get or create user
-            user, created = User.objects.get_or_create(
-                user_id=user_id,
-                defaults={
-                    'email':email,
-                    'role':role,
-                    'is_active': True
-                }
-            )
-            return user
+            # Get user by ID or email
+            try:
+                if user_id:
+                    user = User.objects.get(user_id=user_id)
+                else:
+                    user = User.objects.get(email=email)
+                
+                if not user.is_active:
+                    return None
+                    
+                return user
+            except User.DoesNotExist:
+                return None
         
         except jwt.ExpiredSignatureError:
             return None

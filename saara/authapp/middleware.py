@@ -1,5 +1,6 @@
 """
-Custom authentication middleware for Supabase JWT
+Custom authentication middleware for Django JWT
+Replaces Supabase authentication with local Django authentication
 """
 from django.utils.deprecation import MiddlewareMixin
 from django.contrib.auth import authenticate
@@ -9,10 +10,10 @@ import jwt
 from django.conf import settings
 
 
-class SupabaseJWTAuthentication(BaseAuthentication):
+class DjangoJWTAuthentication(BaseAuthentication):
     """
-    DRF Authentication class for Supabase JWT tokens
-    Also supports development tokens signed with Django SECRET_KEY
+    DRF Authentication class for Django JWT tokens
+    Uses Django's SECRET_KEY to sign and verify tokens
     """
     
     def authenticate(self, request):
@@ -24,54 +25,32 @@ class SupabaseJWTAuthentication(BaseAuthentication):
         token = auth_header.replace('Bearer ', '')
         
         try:
-            # First, try to decode as a dev token (signed with SECRET_KEY)
-            if settings.DEBUG:
-                try:
-                    payload = jwt.decode(
-                        token,
-                        settings.SECRET_KEY,
-                        algorithms=['HS256']
-                    )
-                    # This is a dev token, get the user
-                    from saara.authapp.models import User
-                    user_id = payload.get('sub')
-                    
-                    if user_id:
-                        user = User.objects.get(user_id=user_id)
-                        return (user, token)
-                except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
-                    pass  # Not a dev token, try Supabase token
-                except Exception:
-                    pass
-            
-            # Decode the Supabase JWT token
-            # Token is already validated by Supabase, we just need to extract claims
+            # Decode the JWT token using Django's SECRET_KEY
             payload = jwt.decode(
                 token,
-                options={"verify_signature": False}
+                settings.SECRET_KEY,
+                algorithms=['HS256']
             )
             
-            # Authenticate using the custom backend
             from saara.authapp.models import User
             
             user_id = payload.get('sub')
             email = payload.get('email')
-            role = payload.get('role', 'student')
             
-            if not user_id or not email:
+            if not user_id and not email:
                 raise AuthenticationFailed('Invalid token payload')
             
-            # Try to find user by email first (for seeded users), then by Supabase ID
+            # Try to find user by user_id first, then by email
             try:
-                user = User.objects.get(email=email)
+                if user_id:
+                    user = User.objects.get(user_id=user_id)
+                else:
+                    user = User.objects.get(email=email)
             except User.DoesNotExist:
-                # Create new user with Supabase ID
-                user = User.objects.create(
-                    user_id=user_id,
-                    email=email,
-                    role=role,
-                    is_active=True
-                )
+                raise AuthenticationFailed('User not found')
+            
+            if not user.is_active:
+                raise AuthenticationFailed('User account is disabled')
             
             return (user, token)
             
@@ -83,9 +62,9 @@ class SupabaseJWTAuthentication(BaseAuthentication):
             raise AuthenticationFailed(f'Authentication failed: {str(e)}')
 
 
-class SupabaseAuthMiddleware(MiddlewareMixin):
+class DjangoAuthMiddleware(MiddlewareMixin):
     """
-    Middleware to authenticate requests using Supabase JWT
+    Middleware to authenticate requests using Django JWT
     """
     
     def process_request(self, request):

@@ -59,8 +59,9 @@ class Student(models.Model):
     """Student Profile Model"""
     student_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
+    roll_no = models.CharField(max_length=20, unique=True, null=True, blank=True)
     first_name = models.CharField(max_length=255)
-    middle_name = models.CharField(max_length=255)
+    middle_name = models.CharField(max_length=255, blank=True, default='')
     last_name = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, related_name='students')
     program = models.CharField(max_length=100)
@@ -71,7 +72,7 @@ class Student(models.Model):
         db_table = "students"
         
     def __str__(self):
-        return f"{self.first_name} {self.last_name} ({self.student_id})"
+        return f"{self.first_name} {self.last_name} ({self.roll_no or self.student_id})"
 
 class Teacher(models.Model):
     """Teacher profile model"""
@@ -202,6 +203,9 @@ class StudentFees(models.Model):
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     due_amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    receipt_number = models.CharField(max_length=100, blank=True, default='')
+    payment_date = models.DateField(null=True, blank=True)
+    description = models.CharField(max_length=255, blank=True, default='')
     
     class Meta:
         db_table = 'student_fees'
@@ -213,8 +217,8 @@ class Assignment(models.Model):
     assignments_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     title = models.CharField(max_length=255)
-    description = models.TextField(max_length=400)
-    file_url = models.CharField(max_length=255)
+    description = models.TextField(max_length=400, blank=True, default='')
+    file_url = models.CharField(max_length=255, blank=True, default='')
     due_date = models.DateTimeField()
     created_by = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name='created_assignments')
     
@@ -317,3 +321,94 @@ class Announcement(models.Model):
     
     def __str__(self):
         return f"{self.title} ({self.created_at.strftime('%Y-%m-%d')})"
+
+
+class Timetable(models.Model):
+    """Timetable/Schedule for courses"""
+    DAY_CHOICES = [
+        ('monday', 'Monday'),
+        ('tuesday', 'Tuesday'),
+        ('wednesday', 'Wednesday'),
+        ('thursday', 'Thursday'),
+        ('friday', 'Friday'),
+        ('saturday', 'Saturday'),
+    ]
+    
+    timetable_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='timetable_slots')
+    teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name='timetable_slots')
+    day_of_week = models.CharField(max_length=10, choices=DAY_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    room_number = models.CharField(max_length=50, blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'timetables'
+        ordering = ['day_of_week', 'start_time']
+    
+    def __str__(self):
+        return f"{self.course.course_name} - {self.day_of_week} {self.start_time}-{self.end_time}"
+
+
+class AcademicCalendar(models.Model):
+    """Academic calendar events - exams, holidays, etc."""
+    EVENT_TYPE_CHOICES = [
+        ('exam', 'Examination'),
+        ('holiday', 'Holiday'),
+        ('event', 'Event'),
+        ('deadline', 'Deadline'),
+        ('semester_start', 'Semester Start'),
+        ('semester_end', 'Semester End'),
+    ]
+    
+    event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES)
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='calendar_events')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'academic_calendar'
+        ordering = ['start_date']
+    
+    def __str__(self):
+        return f"{self.title} ({self.start_date})"
+
+
+class LeaveRequest(models.Model):
+    """Leave requests from students and teachers"""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    LEAVE_TYPE_CHOICES = [
+        ('sick', 'Sick Leave'),
+        ('personal', 'Personal Leave'),
+        ('emergency', 'Emergency Leave'),
+        ('other', 'Other'),
+    ]
+    
+    leave_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='leave_requests')
+    leave_type = models.CharField(max_length=20, choices=LEAVE_TYPE_CHOICES)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_leaves')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'leave_requests'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.leave_type} ({self.start_date} to {self.end_date})"
